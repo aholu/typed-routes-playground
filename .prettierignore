@@ -3,5 +3,9 @@ node_modules/
 dist/
 package-lock.json
 pnpm-lock.yaml
-*.tsbuildinfo
 yarn.lock
+*.tsbuildinfo
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

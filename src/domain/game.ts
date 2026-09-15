@@ -41,12 +41,14 @@ export type NewGame = Omit<Game, 'id'>
 export const parseGameId = (raw: string): Result<GameId, ApiError> =>
   UUID_PATTERN.test(raw) ? ok(raw as GameId) : err({ kind: 'invalid_input', field: 'id', message: 'expected a UUID' })
 
+const normalizeName = (name: string): string => name.trim()
+
 /** Wire format in, domain model out. Field renaming happens here and nowhere else. */
 export const fromDto = (dto: GameDto): Result<Game, ApiError> => {
   const id = parseGameId(dto.uuid)
   if (!id.ok) return id
 
-  return ok({ id: id.value, name: dto.name, releaseYear: dto.release_year })
+  return ok({ id: id.value, name: normalizeName(dto.name), releaseYear: dto.release_year })
 }
 
 /** Generates a fresh id. The only caller of parseGameId that cannot fail. */
@@ -70,7 +72,7 @@ export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
 
   const raw = input as Record<string, unknown>
 
-  if (typeof raw.name !== 'string' || raw.name.trim().length === 0) {
+  if (typeof raw.name !== 'string' || normalizeName(raw.name).length === 0) {
     return err({ kind: 'invalid_input', field: 'name', message: 'expected a non-empty string' })
   }
 
@@ -82,5 +84,5 @@ export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
     return err({ kind: 'invalid_input', field: 'releaseYear', message: `expected 1960-${maxYear}` })
   }
 
-  return ok({ name: raw.name.trim(), releaseYear: raw.releaseYear })
+  return ok({ name: normalizeName(raw.name), releaseYear: raw.releaseYear })
 }

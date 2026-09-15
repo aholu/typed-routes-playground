@@ -5,8 +5,9 @@ signatures, path parameters and response shapes are all computed from it by the
 type system.
 
 > **This is a sandbox, not a library.** It exists to play with TypeScript as a
-> design tool. Storage is an in-memory `Map`, there are no tests beyond
-> `tsc --noEmit`, and nothing here is meant for production use.
+> design tool. Storage is SQLite via the built-in `node:sqlite` module, there
+> are no tests beyond `tsc --noEmit`, and nothing here is meant for production
+> use.
 
 No framework, no validation library, no ORM — just Node's built-in `http`, so
 that every guarantee is visibly the work of the compiler rather than of a
@@ -30,7 +31,8 @@ curl -i localhost:3000/games/not-a-uuid   # 422
 curl -i localhost:3000/players            # 404
 ```
 
-Writes are lost on restart — the store is seeded from `src/data/games.ts`.
+Writes persist across restarts in a local SQLite file (`DB_PATH`, defaults to
+`games.db`); the table is seeded once from `src/data/games.ts` on first run.
 
 ## The idea
 
@@ -74,15 +76,13 @@ What that buys, concretely:
 src/
   domain/      Game model, branded ids, Result, ApiError — no HTTP in here
   data/        Seed rows in wire format
-  repository/  In-memory store keyed by GameId
+  repository/  SQLite-backed store keyed by GameId, behind an async interface
   api/         Route table, computed handler types, handlers
   http/        Dispatch loop and Node server adapter
 ```
 
 ## Things left to try
 
-- Make the repository asynchronous, then back it with a real store — change the
-  interface first and let the compiler find every call site.
 - Add `PATCH /games/:id` with a partial body.
 - Add a field to `Game` and follow the errors through DTO mapping, parser and
   seed data.

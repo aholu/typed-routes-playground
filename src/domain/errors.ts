@@ -9,9 +9,8 @@ export type ApiError =
   | { readonly kind: 'not_found'; readonly resource: string; readonly id: string }
   | { readonly kind: 'invalid_input'; readonly field: string; readonly message: string }
   | { readonly kind: 'conflict'; readonly message: string }
-  | { readonly kind: 'rate_limited'; readonly retryAfterSeconds: number }
 
-export type HttpErrorStatus = 404 | 409 | 422 | 429
+export type HttpErrorStatus = 404 | 409 | 422
 
 export type HttpFailure = {
   readonly status: HttpErrorStatus
@@ -26,11 +25,6 @@ export const toHttpFailure = (error: ApiError): HttpFailure => {
       return { status: 422, body: { error: error.kind, detail: `${error.field}: ${error.message}` } }
     case 'conflict':
       return { status: 409, body: { error: error.kind, detail: error.message } }
-    case 'rate_limited':
-      return {
-        status: 429,
-        body: { error: error.kind, detail: `Too Many Requests. Retry after ${error.retryAfterSeconds} seconds` },
-      }
     default: {
       // Exhaustive check: if a new ApiError variant is added and not handled
       // above, `error` is no longer `never` and this assignment fails to compile.

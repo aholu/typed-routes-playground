@@ -1,6 +1,6 @@
 import { err, ok } from '../domain/result.js'
 import { newGameId, parseGameId, parseNewGame } from '../domain/game.js'
-import type { GameRepository } from '../repository/game-repository.js'
+import type { GameStore } from '../repository/game-store.js'
 import type { BodyParserMap, HandlerMap, SuccessStatusMap } from './routes.js'
 
 /**
@@ -8,34 +8,29 @@ import type { BodyParserMap, HandlerMap, SuccessStatusMap } from './routes.js'
  * the individual handlers. The HandlerMap annotation on the factory pushes them
  * down into every entry.
  */
-export const createHandlers = (repository: GameRepository): HandlerMap => ({
+export const createHandlers = (store: GameStore): HandlerMap => ({
   'GET /': async () => ok({ status: 'ok', uptimeSeconds: Math.round(process.uptime()) }),
 
-  'GET /games': async () => ok(repository.list()),
+  'GET /games': async () => ok(await store.list()),
 
   'GET /games/:id': async ({ params }) => {
     const id = parseGameId(params.id)
     // An Err already satisfies this route's Result, so it passes straight through.
     if (!id.ok) return id
 
-    const game = repository.find(id.value)
+    const game = await store.find(id.value)
     if (game === undefined) return err({ kind: 'not_found', resource: 'game', id: params.id })
 
     return ok(game)
   },
 
-  'POST /games': async ({ body }) => {
-    const duplicate = repository.list().some((game) => game.name === body.name)
-    if (duplicate) return err({ kind: 'conflict', message: `"${body.name}" already exists` })
-
-    return ok(repository.save({ id: newGameId(), ...body }))
-  },
+  'POST /games': async ({ body }) => store.save({ id: newGameId(), ...body }),
 
   'DELETE /games/:id': async ({ params }) => {
     const id = parseGameId(params.id)
     if (!id.ok) return id
 
-    if (!repository.remove(id.value)) {
+    if (!(await store.remove(id.value))) {
       return err({ kind: 'not_found', resource: 'game', id: params.id })
     }
 

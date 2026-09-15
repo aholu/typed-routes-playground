@@ -1,6 +1,6 @@
 import type { ApiError } from '../domain/errors.js'
 import type { Result } from '../domain/result.js'
-import type { Game, GameId, NewGame } from '../domain/game.js'
+import type { Game, GameId, NewGame, PatchGame } from '../domain/game.js'
 
 /**
  * THE SINGLE SOURCE OF TRUTH.
@@ -14,6 +14,7 @@ export type Routes = {
   'GET /games': { response: readonly Game[] }
   'GET /games/:id': { response: Game }
   'POST /games': { body: NewGame; response: Game }
+  'PATCH /games/:id': { body: PatchGame; response: Game }
   'DELETE /games/:id': { response: { readonly deleted: GameId } }
 }
 

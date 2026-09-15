@@ -25,6 +25,7 @@ pnpm check    # type check — this is the test suite
 curl localhost:3000/games
 curl localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093
 curl -X POST localhost:3000/games -d '{"name":"Grounded","releaseYear":2022}'
+curl -X PATCH localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093 -d '{"releaseYear":2017}'
 curl -X DELETE localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093
 
 curl -i localhost:3000/games/not-a-uuid   # 422
@@ -43,6 +44,7 @@ export type Routes = {
   'GET /games': { response: readonly Game[] }
   'GET /games/:id': { response: Game }
   'POST /games': { body: NewGame; response: Game }
+  'PATCH /games/:id': { body: PatchGame; response: Game }
   'DELETE /games/:id': { response: { readonly deleted: GameId } }
 }
 ```
@@ -83,7 +85,6 @@ src/
 
 ## Things left to try
 
-- Add `PATCH /games/:id` with a partial body.
 - Add a field to `Game` and follow the errors through DTO mapping, parser and
   seed data.
 - Compute query parameters from the route key the way path params are computed.

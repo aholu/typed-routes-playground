@@ -1,0 +1,26 @@
+{
+  "name": "typed-routes-playground",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "pnpm clean && tsc -p tsconfig.build.json",
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "format": "prettier --write .",
+    "clean": "rm -rf dist tsconfig.build.tsbuildinfo"
+  },
+  "packageManager": "pnpm@12.4.1",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.1",
+      "onFail": "download"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}

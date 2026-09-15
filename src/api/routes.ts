@@ -62,5 +62,5 @@ export type BodyParserMap = {
 }
 
 /** Every route must state its success status code. */
-export type HttpSuccessStatus = 200 | 201 | 204
+export type HttpSuccessStatus = 200 | 201
 export type SuccessStatusMap = { readonly [K in RouteKey]: HttpSuccessStatus }

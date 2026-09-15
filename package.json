@@ -7,7 +7,8 @@
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "format": "prettier --write .",
-    "clean": "rm -rf dist tsconfig.build.tsbuildinfo"
+    "clean": "rm -rf dist tsconfig.build.tsbuildinfo",
+    "clean:db": "rm -rf games.db"
   },
   "packageManager": "pnpm@12.4.1",
   "devEngines": {

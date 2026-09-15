@@ -33,7 +33,7 @@ curl -i localhost:3000/players            # 404
 ```
 
 Writes persist across restarts in a local SQLite file (`DB_PATH`, defaults to
-`games.db`); the table is seeded once from `src/data/games.ts` on first run.
+`games.db`); the table is seeded once from `src/repository/seed-data.ts` on first run.
 
 ## The idea
 
@@ -77,7 +77,6 @@ What that buys, concretely:
 ```
 src/
   domain/      Game model, branded ids, Result, ApiError — no HTTP in here
-  data/        Seed rows in wire format
   repository/  SQLite-backed store keyed by GameId, behind an async interface
   api/         Route table, computed handler types, handlers
   http/        Dispatch loop and Node server adapter

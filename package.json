@@ -1,5 +1,11 @@
 {
   "name": "typed-routes-playground",
+  "description": "A small HTTP API where the route table is the single source of truth: handler signatures, path params, and response shapes are all computed from it by the type system.",
+  "author": {
+    "name": "Anton Holubeu",
+    "email": "anton@holu.dev",
+    "url": "https://github.com/aholu"
+  },
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",

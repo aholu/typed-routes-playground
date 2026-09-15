@@ -1,5 +1,5 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
-import { rawGames, type SeedData } from '../data/games.js'
+import { rawGames, type SeedData } from './seed-data.js'
 import { err, ok, type Result } from '../domain/result.js'
 import { fromDto, type Game, type GameId, type PatchGame } from '../domain/game.js'
 import type { ApiError } from '../domain/errors.js'

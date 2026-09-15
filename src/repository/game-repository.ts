@@ -1,7 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { rawGames, type SeedData } from '../data/games.js'
 import { err, ok, type Result } from '../domain/result.js'
-import { fromDto, type Game, type GameId } from '../domain/game.js'
+import { fromDto, type Game, type GameId, type PatchGame } from '../domain/game.js'
 import type { ApiError } from '../domain/errors.js'
 import type { GameStore } from './game-store.js'
 
@@ -28,6 +28,7 @@ export class GameRepository implements GameStore {
   readonly #listStmt: StatementSync
   readonly #findStmt: StatementSync
   readonly #insertStmt: StatementSync
+  readonly #updateStmt: StatementSync
   readonly #removeStmt: StatementSync
   readonly #nameExistsStmt: StatementSync
 
@@ -59,6 +60,7 @@ export class GameRepository implements GameStore {
     this.#listStmt = this.#db.prepare('SELECT id, name, release_year FROM games ORDER BY rowid')
     this.#findStmt = this.#db.prepare('SELECT id, name, release_year FROM games WHERE id = ?')
     this.#insertStmt = this.#db.prepare(INSERT)
+    this.#updateStmt = this.#db.prepare('UPDATE games SET name = ?, release_year = ? WHERE id = ?')
     this.#removeStmt = this.#db.prepare('DELETE FROM games WHERE id = ?')
     this.#nameExistsStmt = this.#db.prepare('SELECT 1 FROM games WHERE name = ?')
 
@@ -114,6 +116,27 @@ export class GameRepository implements GameStore {
     } catch (cause) {
       if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(game.name) !== undefined) {
         return err({ kind: 'conflict', message: `"${game.name}" already exists` })
+      }
+      throw cause
+    }
+  }
+
+  async update(id: GameId, patch: PatchGame): Promise<Result<Game, ApiError> | undefined> {
+    const current = await this.find(id)
+    if (current === undefined) return undefined
+
+    const next: Game = {
+      id,
+      name: patch.name ?? current.name,
+      releaseYear: patch.releaseYear ?? current.releaseYear,
+    }
+
+    try {
+      this.#updateStmt.run(next.name, next.releaseYear, id)
+      return ok(next)
+    } catch (cause) {
+      if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(next.name) !== undefined) {
+        return err({ kind: 'conflict', message: `"${next.name}" already exists` })
       }
       throw cause
     }

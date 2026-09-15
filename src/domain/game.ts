@@ -37,6 +37,9 @@ export type Game = {
 /** What a client sends when creating a game: everything except the id. */
 export type NewGame = Omit<Game, 'id'>
 
+/** What a client sends when patching a game: any subset of the mutable fields. */
+export type PatchGame = Partial<NewGame>
+
 /** The single place where a plain string becomes a GameId. */
 export const parseGameId = (raw: string): Result<GameId, ApiError> =>
   UUID_PATTERN.test(raw) ? ok(raw as GameId) : err({ kind: 'invalid_input', field: 'id', message: 'expected a UUID' })
@@ -65,6 +68,24 @@ export const newGameId = (): GameId => {
  * route contract promises. This function is the only thing that turns it into a
  * NewGame, and the compiler checks that its output really has that shape.
  */
+const validateName = (raw: unknown): Result<string, ApiError> => {
+  if (typeof raw !== 'string' || normalizeName(raw).length === 0) {
+    return err({ kind: 'invalid_input', field: 'name', message: 'expected a non-empty string' })
+  }
+  return ok(normalizeName(raw))
+}
+
+const validateReleaseYear = (raw: unknown): Result<number, ApiError> => {
+  const maxYear = new Date().getFullYear() + 5
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    return err({ kind: 'invalid_input', field: 'releaseYear', message: 'expected an integer' })
+  }
+  if (raw < 1960 || raw > maxYear) {
+    return err({ kind: 'invalid_input', field: 'releaseYear', message: `expected 1960-${maxYear}` })
+  }
+  return ok(raw)
+}
+
 export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
   if (typeof input !== 'object' || input === null) {
     return err({ kind: 'invalid_input', field: 'body', message: 'expected a JSON object' })
@@ -72,17 +93,38 @@ export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
 
   const raw = input as Record<string, unknown>
 
-  if (typeof raw.name !== 'string' || normalizeName(raw.name).length === 0) {
-    return err({ kind: 'invalid_input', field: 'name', message: 'expected a non-empty string' })
+  const name = validateName(raw.name)
+  if (!name.ok) return name
+
+  const releaseYear = validateReleaseYear(raw.releaseYear)
+  if (!releaseYear.ok) return releaseYear
+
+  return ok({ name: name.value, releaseYear: releaseYear.value })
+}
+
+export const parsePatchGame = (input: unknown): Result<PatchGame, ApiError> => {
+  if (typeof input !== 'object' || input === null) {
+    return err({ kind: 'invalid_input', field: 'body', message: 'expected a JSON object' })
   }
 
-  const maxYear = new Date().getFullYear() + 5
-  if (typeof raw.releaseYear !== 'number' || !Number.isInteger(raw.releaseYear)) {
-    return err({ kind: 'invalid_input', field: 'releaseYear', message: 'expected an integer' })
-  }
-  if (raw.releaseYear < 1960 || raw.releaseYear > maxYear) {
-    return err({ kind: 'invalid_input', field: 'releaseYear', message: `expected 1960-${maxYear}` })
+  const raw = input as Record<string, unknown>
+  const patch: { name?: string; releaseYear?: number } = {}
+
+  if ('name' in raw) {
+    const name = validateName(raw.name)
+    if (!name.ok) return name
+    patch.name = name.value
   }
 
-  return ok({ name: normalizeName(raw.name), releaseYear: raw.releaseYear })
+  if ('releaseYear' in raw) {
+    const releaseYear = validateReleaseYear(raw.releaseYear)
+    if (!releaseYear.ok) return releaseYear
+    patch.releaseYear = releaseYear.value
+  }
+
+  if (patch.name === undefined && patch.releaseYear === undefined) {
+    return err({ kind: 'invalid_input', field: 'body', message: 'expected at least one field to update' })
+  }
+
+  return ok(patch)
 }

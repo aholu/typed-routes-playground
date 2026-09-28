@@ -1,5 +1,5 @@
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
-import { isUniqueConstraintViolation, transaction } from './database.js'
+import { createConflictMapper, transaction, type ConflictMapper } from './database.js'
 import { rowToGenre } from './genre-repository.js'
 import { err, ok, type Result } from '../domain/result.js'
 import { fromDto, type Game, type GameId, type GameRecord, type NewGame, type PatchGame } from '../domain/game.js'
@@ -8,11 +8,16 @@ import type { ApiError } from '../domain/errors.js'
 import type { GameStore } from './game-store.js'
 
 const rowToGameRecord = (row: Record<string, unknown>): Result<GameRecord, ApiError> => {
-  const { id, name, release_year: releaseYear } = row
-  if (typeof id !== 'string' || typeof name !== 'string' || typeof releaseYear !== 'number') {
+  const { id, name, slug, release_year: releaseYear } = row
+  if (
+    typeof id !== 'string' ||
+    typeof name !== 'string' ||
+    typeof slug !== 'string' ||
+    typeof releaseYear !== 'number'
+  ) {
     return err({ kind: 'invalid_input', field: 'row', message: 'unexpected column types' })
   }
-  return fromDto({ uuid: id, name, release_year: releaseYear })
+  return fromDto({ uuid: id, name, slug, release_year: releaseYear })
 }
 
 const GENRES_OF = `
@@ -30,21 +35,21 @@ export class GameRepository implements GameStore {
   readonly #insertStmt: StatementSync
   readonly #updateStmt: StatementSync
   readonly #removeStmt: StatementSync
-  readonly #nameExistsStmt: StatementSync
+  readonly #toConflict: ConflictMapper
   readonly #genreExistsStmt: StatementSync
   readonly #linkStmt: StatementSync
   readonly #unlinkAllStmt: StatementSync
 
   constructor(db: DatabaseSync) {
     this.#db = db
-    this.#listStmt = db.prepare('SELECT id, name, release_year FROM games ORDER BY rowid')
-    this.#findStmt = db.prepare('SELECT id, name, release_year FROM games WHERE id = ?')
+    this.#listStmt = db.prepare('SELECT id, name, slug, release_year FROM games ORDER BY rowid')
+    this.#findStmt = db.prepare('SELECT id, name, slug, release_year FROM games WHERE id = ?')
     this.#listGenresStmt = db.prepare(`${GENRES_OF} ORDER BY g.name`)
     this.#findGenresStmt = db.prepare(`${GENRES_OF} WHERE gg.game_id = ? ORDER BY g.name`)
-    this.#insertStmt = db.prepare('INSERT INTO games (id, name, release_year) VALUES (?, ?, ?)')
-    this.#updateStmt = db.prepare('UPDATE games SET name = ?, release_year = ? WHERE id = ?')
+    this.#insertStmt = db.prepare('INSERT INTO games (id, name, slug, release_year) VALUES (?, ?, ?, ?)')
+    this.#updateStmt = db.prepare('UPDATE games SET name = ?, slug = ?, release_year = ? WHERE id = ?')
     this.#removeStmt = db.prepare('DELETE FROM games WHERE id = ?')
-    this.#nameExistsStmt = db.prepare('SELECT 1 FROM games WHERE name = ?')
+    this.#toConflict = createConflictMapper(db, 'games', 'game')
     this.#genreExistsStmt = db.prepare('SELECT 1 FROM genres WHERE id = ?')
     this.#linkStmt = db.prepare('INSERT INTO game_genres (game_id, genre_id) VALUES (?, ?)')
     this.#unlinkAllStmt = db.prepare('DELETE FROM game_genres WHERE game_id = ?')
@@ -121,22 +126,15 @@ export class GameRepository implements GameStore {
     for (const genreId of genreIds) this.#linkStmt.run(id, genreId)
   }
 
-  #toConflict(cause: unknown, name: string): Result<never, ApiError> {
-    if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(name) !== undefined) {
-      return err({ kind: 'conflict', message: `"${name}" already exists` })
-    }
-    throw cause
-  }
-
   async save(id: GameId, game: NewGame): Promise<Result<Game, ApiError>> {
     return transaction(this.#db, () => {
       const genresExist = this.#checkGenresExist(game.genreIds)
       if (!genresExist.ok) return genresExist
 
       try {
-        this.#insertStmt.run(id, game.name, game.releaseYear)
+        this.#insertStmt.run(id, game.name, game.slug, game.releaseYear)
       } catch (cause) {
-        return this.#toConflict(cause, game.name)
+        return this.#toConflict(cause, { id, ...game })
       }
 
       this.#replaceGenres(id, game.genreIds)
@@ -154,11 +152,16 @@ export class GameRepository implements GameStore {
         if (!genresExist.ok) return genresExist
       }
 
-      const name = patch.name ?? current.name
+      const next: GameRecord = {
+        id,
+        name: patch.name ?? current.name,
+        slug: patch.slug ?? current.slug,
+        releaseYear: patch.releaseYear ?? current.releaseYear,
+      }
       try {
-        this.#updateStmt.run(name, patch.releaseYear ?? current.releaseYear, id)
+        this.#updateStmt.run(next.name, next.slug, next.releaseYear, id)
       } catch (cause) {
-        return this.#toConflict(cause, name)
+        return this.#toConflict(cause, next)
       }
 
       if (patch.genreIds !== undefined) this.#replaceGenres(id, patch.genreIds)

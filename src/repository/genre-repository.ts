@@ -1,5 +1,5 @@
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
-import { isUniqueConstraintViolation } from './database.js'
+import { createConflictMapper, type ConflictMapper } from './database.js'
 import { err, ok, type Result } from '../domain/result.js'
 import { genreFromDto, type Genre, type GenreId, type NewGenre, type PatchGenre } from '../domain/genre.js'
 import type { ApiError } from '../domain/errors.js'
@@ -20,8 +20,7 @@ export class GenreRepository implements GenreStore {
   readonly #insertStmt: StatementSync
   readonly #updateStmt: StatementSync
   readonly #removeStmt: StatementSync
-  readonly #nameTakenStmt: StatementSync
-  readonly #slugTakenStmt: StatementSync
+  readonly #toConflict: ConflictMapper
 
   constructor(db: DatabaseSync) {
     this.#listStmt = db.prepare('SELECT id, name, slug FROM genres ORDER BY name')
@@ -29,10 +28,7 @@ export class GenreRepository implements GenreStore {
     this.#insertStmt = db.prepare('INSERT INTO genres (id, name, slug) VALUES (?, ?, ?)')
     this.#updateStmt = db.prepare('UPDATE genres SET name = ?, slug = ? WHERE id = ?')
     this.#removeStmt = db.prepare('DELETE FROM genres WHERE id = ?')
-    // Excluding the genre itself matters on update: with two unique columns, a
-    // slug clash must not be misreported as a clash with the genre's own name.
-    this.#nameTakenStmt = db.prepare('SELECT 1 FROM genres WHERE name = ? AND id != ?')
-    this.#slugTakenStmt = db.prepare('SELECT 1 FROM genres WHERE slug = ? AND id != ?')
+    this.#toConflict = createConflictMapper(db, 'genres', 'genre')
   }
 
   async list(): Promise<readonly Genre[]> {
@@ -85,18 +81,5 @@ export class GenreRepository implements GenreStore {
 
   async remove(id: GenreId): Promise<boolean> {
     return this.#removeStmt.run(id).changes > 0
-  }
-
-  /** Turns a unique violation into a conflict naming the clashing field; rethrows anything else. */
-  #toConflict(cause: unknown, genre: Genre): Result<never, ApiError> {
-    if (isUniqueConstraintViolation(cause)) {
-      if (this.#nameTakenStmt.get(genre.name, genre.id) !== undefined) {
-        return err({ kind: 'conflict', message: `genre "${genre.name}" already exists` })
-      }
-      if (this.#slugTakenStmt.get(genre.slug, genre.id) !== undefined) {
-        return err({ kind: 'conflict', message: `slug "${genre.slug}" is already taken` })
-      }
-    }
-    throw cause
   }
 }

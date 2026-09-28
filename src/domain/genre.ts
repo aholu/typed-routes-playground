@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { err, ok, type Result } from './result.js'
 import { isUuid, type Brand } from './id.js'
+import { resolveSlug, validateSlug } from './slug.js'
 import { asJsonObject, normalizeName, validateName } from './validation.js'
 import type { ApiError } from './errors.js'
 
@@ -37,33 +38,6 @@ export const newGenreId = (): GenreId => {
   return id.value
 }
 
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-
-const validateSlug = (raw: unknown): Result<string, ApiError> =>
-  typeof raw === 'string' && SLUG_PATTERN.test(raw)
-    ? ok(raw)
-    : err({
-        kind: 'invalid_input',
-        field: 'slug',
-        message: 'expected lowercase latin letters and digits joined by "-"',
-      })
-
-/** 'Open World' -> 'open-world', 'Pokémon' -> 'pokemon'. Letters outside latin are dropped. */
-const slugify = (name: string): string =>
-  name
-    .normalize('NFKD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-
-const deriveSlug = (name: string): Result<string, ApiError> => {
-  const slug = slugify(name)
-  return slug.length > 0
-    ? ok(slug)
-    : err({ kind: 'invalid_input', field: 'slug', message: 'cannot be derived from name, provide one explicitly' })
-}
-
 export const genreFromDto = (dto: GenreDto): Result<Genre, ApiError> => {
   const id = parseGenreId(dto.uuid)
   if (!id.ok) return id
@@ -82,13 +56,13 @@ export const parseNewGenre = (input: unknown): Result<NewGenre, ApiError> => {
   const name = validateName(raw.value.name)
   if (!name.ok) return name
 
-  const slug = 'slug' in raw.value ? validateSlug(raw.value.slug) : deriveSlug(name.value)
+  const slug = resolveSlug(raw.value, name.value)
   if (!slug.ok) return slug
 
   return ok({ name: name.value, slug: slug.value })
 }
 
-/** Renaming does not touch the slug: slugs end up in URLs, so they only change on request. */
+/** Renaming does not touch the slug; see slug.ts. */
 export const parsePatchGenre = (input: unknown): Result<PatchGenre, ApiError> => {
   const raw = asJsonObject(input)
   if (!raw.ok) return raw

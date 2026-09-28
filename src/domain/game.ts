@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { err, ok, type Result } from './result.js'
 import { isUuid, type Brand } from './id.js'
 import { parseGenreId, type Genre, type GenreId } from './genre.js'
+import { resolveSlug, validateSlug } from './slug.js'
 import { asJsonObject, normalizeName, validateName } from './validation.js'
 import type { ApiError } from './errors.js'
 
@@ -14,6 +15,7 @@ export type GameId = Brand<string, 'GameId'>
 export type GameDto = {
   readonly uuid: string
   readonly name: string
+  readonly slug: string
   readonly release_year: number
 }
 
@@ -21,6 +23,7 @@ export type GameDto = {
 export type Game = {
   readonly id: GameId
   readonly name: string
+  readonly slug: string
   readonly releaseYear: number
   readonly genres: readonly Genre[]
 }
@@ -45,7 +48,10 @@ export const fromDto = (dto: GameDto): Result<GameRecord, ApiError> => {
   const id = parseGameId(dto.uuid)
   if (!id.ok) return id
 
-  return ok({ id: id.value, name: normalizeName(dto.name), releaseYear: dto.release_year })
+  const slug = validateSlug(dto.slug)
+  if (!slug.ok) return slug
+
+  return ok({ id: id.value, name: normalizeName(dto.name), slug: slug.value, releaseYear: dto.release_year })
 }
 
 /** Generates a fresh id. The only caller of parseGameId that cannot fail. */
@@ -96,7 +102,8 @@ const validateGenreIds = (raw: unknown): Result<readonly GenreId[], ApiError> =>
  * route contract promises. This function is the only thing that turns it into a
  * NewGame, and the compiler checks that its output really has that shape.
  *
- * `genreIds` is optional: a game can start with no genres.
+ * `slug` is optional and derived from the name when absent; `genreIds` is
+ * optional too: a game can start with no genres.
  */
 export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
   const raw = asJsonObject(input)
@@ -105,26 +112,38 @@ export const parseNewGame = (input: unknown): Result<NewGame, ApiError> => {
   const name = validateName(raw.value.name)
   if (!name.ok) return name
 
+  const slug = resolveSlug(raw.value, name.value)
+  if (!slug.ok) return slug
+
   const releaseYear = validateReleaseYear(raw.value.releaseYear)
   if (!releaseYear.ok) return releaseYear
 
   const genreIds = 'genreIds' in raw.value ? validateGenreIds(raw.value.genreIds) : ok([])
   if (!genreIds.ok) return genreIds
 
-  return ok({ name: name.value, releaseYear: releaseYear.value, genreIds: genreIds.value })
+  return ok({ name: name.value, slug: slug.value, releaseYear: releaseYear.value, genreIds: genreIds.value })
 }
 
-/** A `genreIds` in a patch replaces the game's whole genre set; `[]` clears it. */
+/**
+ * A `genreIds` in a patch replaces the game's whole genre set; `[]` clears it.
+ * Renaming does not touch the slug; see slug.ts.
+ */
 export const parsePatchGame = (input: unknown): Result<PatchGame, ApiError> => {
   const raw = asJsonObject(input)
   if (!raw.ok) return raw
 
-  const patch: { name?: string; releaseYear?: number; genreIds?: readonly GenreId[] } = {}
+  const patch: { name?: string; slug?: string; releaseYear?: number; genreIds?: readonly GenreId[] } = {}
 
   if ('name' in raw.value) {
     const name = validateName(raw.value.name)
     if (!name.ok) return name
     patch.name = name.value
+  }
+
+  if ('slug' in raw.value) {
+    const slug = validateSlug(raw.value.slug)
+    if (!slug.ok) return slug
+    patch.slug = slug.value
   }
 
   if ('releaseYear' in raw.value) {
@@ -139,7 +158,7 @@ export const parsePatchGame = (input: unknown): Result<PatchGame, ApiError> => {
     patch.genreIds = genreIds.value
   }
 
-  if (patch.name === undefined && patch.releaseYear === undefined && patch.genreIds === undefined) {
+  if (Object.keys(patch).length === 0) {
     return err({ kind: 'invalid_input', field: 'body', message: 'expected at least one field to update' })
   }
 

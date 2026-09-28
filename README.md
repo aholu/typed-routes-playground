@@ -25,7 +25,8 @@ pnpm check    # type check — this is the test suite
 ```bash
 curl localhost:3000/games
 curl localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093
-curl -X POST localhost:3000/games -d '{"name":"Grounded","releaseYear":2022}'
+curl -X POST localhost:3000/games -d '{"name":"Grounded","releaseYear":2022}'   # slug derived: grounded
+curl -X POST localhost:3000/games -d '{"name":"STALKER 2","slug":"stalker-2","releaseYear":2024}'
 curl -X PATCH localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093 -d '{"releaseYear":2017}'
 curl -X DELETE localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093
 
@@ -44,14 +45,21 @@ curl -i localhost:3000/players            # 404
 
 Writes persist across restarts in a local SQLite file (`DB_PATH`, defaults to
 `games.db`). Each table is seeded from `src/repository/seed-data.ts` while it is
-empty. The schema is versioned through `PRAGMA user_version`, and an older
-database is migrated forward on startup (see `src/repository/database.ts`).
+empty. The whole schema is created in one go on a fresh file (see
+`src/repository/database.ts`); there are no migrations, so after a schema
+change run `pnpm clean:db` and restart.
 
 Games and genres are many-to-many through a `game_genres` link table, with
 foreign keys on and `ON DELETE CASCADE` on both sides: deleting a game or a
 genre removes its links, never the other side. A game response embeds its
 genres; a game request refers to them by `genreIds`, and an id that does not
 exist is a 422.
+
+Games and genres both have a `slug`, unique per table. On create it is
+optional and derived from the name (`"Halo 5: Guardians"` → `halo-5-guardians`);
+when nothing latin is left to derive from, the request is a 422 asking for an
+explicit one. Renaming keeps the slug: it only changes when a PATCH sends one.
+Both models share the same rules from `src/domain/slug.ts`.
 
 ## The idea
 
@@ -103,13 +111,11 @@ What that buys, concretely:
 ```
 src/
   domain/      Game and Genre models, branded ids, Result, ApiError — no HTTP in here
-  repository/  Schema, migrations and seeding; SQLite-backed stores behind async interfaces
+  repository/  Schema and seeding; SQLite-backed stores behind async interfaces
   api/         Route table, computed handler types, handlers
   http/        Dispatch loop and Node server adapter
 ```
 
 ## Things left to try
 
-- Add a field to `Game` and follow the errors through DTO mapping, parser and
-  seed data.
 - Compute query parameters from the route key the way path params are computed.

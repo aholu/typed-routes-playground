@@ -1,17 +1,13 @@
-import { DatabaseSync, type StatementSync } from 'node:sqlite'
-import { rawGames, type SeedData } from './seed-data.js'
+import type { DatabaseSync, StatementSync } from 'node:sqlite'
+import { isUniqueConstraintViolation, transaction } from './database.js'
+import { rowToGenre } from './genre-repository.js'
 import { err, ok, type Result } from '../domain/result.js'
-import { fromDto, type Game, type GameId, type PatchGame } from '../domain/game.js'
+import { fromDto, type Game, type GameId, type GameRecord, type NewGame, type PatchGame } from '../domain/game.js'
+import type { Genre, GenreId } from '../domain/genre.js'
 import type { ApiError } from '../domain/errors.js'
 import type { GameStore } from './game-store.js'
 
-// SQLITE_CONSTRAINT_UNIQUE, from https://www.sqlite.org/rescode.html#constraint_unique
-const SQLITE_CONSTRAINT_UNIQUE = 2067
-
-const isUniqueConstraintViolation = (cause: unknown): boolean =>
-  typeof cause === 'object' && cause !== null && 'errcode' in cause && cause.errcode === SQLITE_CONSTRAINT_UNIQUE
-
-const rowToGame = (row: Record<string, unknown>): Result<Game, ApiError> => {
+const rowToGameRecord = (row: Record<string, unknown>): Result<GameRecord, ApiError> => {
   const { id, name, release_year: releaseYear } = row
   if (typeof id !== 'string' || typeof name !== 'string' || typeof releaseYear !== 'number') {
     return err({ kind: 'invalid_input', field: 'row', message: 'unexpected column types' })
@@ -19,73 +15,64 @@ const rowToGame = (row: Record<string, unknown>): Result<Game, ApiError> => {
   return fromDto({ uuid: id, name, release_year: releaseYear })
 }
 
-const INSERT = 'INSERT INTO games (id, name, release_year) VALUES (?, ?, ?)'
-
-const SCHEMA_VERSION = 1
+const GENRES_OF = `
+  SELECT gg.game_id, g.id, g.name, g.slug
+  FROM game_genres gg
+  JOIN genres g ON g.id = gg.genre_id
+`
 
 export class GameRepository implements GameStore {
   readonly #db: DatabaseSync
   readonly #listStmt: StatementSync
   readonly #findStmt: StatementSync
+  readonly #listGenresStmt: StatementSync
+  readonly #findGenresStmt: StatementSync
   readonly #insertStmt: StatementSync
   readonly #updateStmt: StatementSync
   readonly #removeStmt: StatementSync
   readonly #nameExistsStmt: StatementSync
+  readonly #genreExistsStmt: StatementSync
+  readonly #linkStmt: StatementSync
+  readonly #unlinkAllStmt: StatementSync
 
-  constructor(dbPath: string, source: SeedData = rawGames) {
-    this.#db = new DatabaseSync(dbPath)
-
-    const { user_version: version } = this.#db.prepare('PRAGMA user_version').get() as { user_version: number }
-    const isFreshDatabase =
-      version === 0 &&
-      this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'games'").get() === undefined
-
-    if (isFreshDatabase) {
-      this.#db.exec(`
-        CREATE TABLE games (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-          release_year INTEGER NOT NULL
-        )
-      `)
-      this.#db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
-    } else if (version !== SCHEMA_VERSION) {
-      throw new Error(
-        `${dbPath}: schema version ${version} does not match expected ${SCHEMA_VERSION} ` +
-          '(0 may also mean a database predating schema versioning) — ' +
-          'no migrations exist in this sandbox, delete the file and restart to reseed',
-      )
-    }
-
-    this.#listStmt = this.#db.prepare('SELECT id, name, release_year FROM games ORDER BY rowid')
-    this.#findStmt = this.#db.prepare('SELECT id, name, release_year FROM games WHERE id = ?')
-    this.#insertStmt = this.#db.prepare(INSERT)
-    this.#updateStmt = this.#db.prepare('UPDATE games SET name = ?, release_year = ? WHERE id = ?')
-    this.#removeStmt = this.#db.prepare('DELETE FROM games WHERE id = ?')
-    this.#nameExistsStmt = this.#db.prepare('SELECT 1 FROM games WHERE name = ?')
-
-    this.#seed(source)
+  constructor(db: DatabaseSync) {
+    this.#db = db
+    this.#listStmt = db.prepare('SELECT id, name, release_year FROM games ORDER BY rowid')
+    this.#findStmt = db.prepare('SELECT id, name, release_year FROM games WHERE id = ?')
+    this.#listGenresStmt = db.prepare(`${GENRES_OF} ORDER BY g.name`)
+    this.#findGenresStmt = db.prepare(`${GENRES_OF} WHERE gg.game_id = ? ORDER BY g.name`)
+    this.#insertStmt = db.prepare('INSERT INTO games (id, name, release_year) VALUES (?, ?, ?)')
+    this.#updateStmt = db.prepare('UPDATE games SET name = ?, release_year = ? WHERE id = ?')
+    this.#removeStmt = db.prepare('DELETE FROM games WHERE id = ?')
+    this.#nameExistsStmt = db.prepare('SELECT 1 FROM games WHERE name = ?')
+    this.#genreExistsStmt = db.prepare('SELECT 1 FROM genres WHERE id = ?')
+    this.#linkStmt = db.prepare('INSERT INTO game_genres (game_id, genre_id) VALUES (?, ?)')
+    this.#unlinkAllStmt = db.prepare('DELETE FROM game_genres WHERE game_id = ?')
   }
 
-  #seed(source: SeedData): void {
-    const row = this.#db.prepare('SELECT COUNT(*) AS count FROM games').get()
-    const count = row?.count
-    if (typeof count !== 'number') throw new Error('unreachable: COUNT(*) did not return a number')
-    if (count > 0) return
-
-    for (const [uuid, game] of Object.entries(source)) {
-      const parsed = fromDto({ uuid, name: game.name, release_year: game.release_year })
-      // Malformed rows are skipped rather than crashing startup.
-      if (parsed.ok) this.#insertStmt.run(parsed.value.id, parsed.value.name, parsed.value.releaseYear)
+  /** Link rows grouped by game id. Two queries for the whole list, not one per game. */
+  #genresByGame(rows: readonly Record<string, unknown>[]): Map<string, Genre[]> {
+    const byGame = new Map<string, Genre[]>()
+    for (const row of rows) {
+      const genre = rowToGenre(row)
+      if (!genre.ok || typeof row.game_id !== 'string') {
+        console.warn('skipping corrupt genre link:', row)
+        continue
+      }
+      const genres = byGame.get(row.game_id) ?? []
+      genres.push(genre.value)
+      byGame.set(row.game_id, genres)
     }
+    return byGame
   }
 
   async list(): Promise<readonly Game[]> {
+    const genresByGame = this.#genresByGame(this.#listGenresStmt.all())
     const games: Game[] = []
     for (const row of this.#listStmt.all()) {
-      const game = rowToGame(row)
+      const game = rowToGameRecord(row)
       if (game.ok) {
-        games.push(game.value)
+        games.push({ ...game.value, genres: genresByGame.get(game.value.id) ?? [] })
       } else {
         // Not the same as "no games" — the row is there, it just no longer
         // parses. Surfacing it as a gap in the list would hide a real fault.
@@ -95,59 +82,92 @@ export class GameRepository implements GameStore {
     return games
   }
 
-  async find(id: GameId): Promise<Game | undefined> {
+  /** Synchronous so that writes can read their own result inside a transaction. */
+  #read(id: GameId): Game | undefined {
     const row = this.#findStmt.get(id)
     if (row === undefined) return undefined
 
-    const game = rowToGame(row)
+    const game = rowToGameRecord(row)
     if (!game.ok) {
       // The row exists — this is corruption, not a missing game. A 404 would
       // say otherwise, so at least this doesn't vanish without a trace.
       console.warn(`corrupt row for game ${id}:`, game.error)
       return undefined
     }
-    return game.value
+    return { ...game.value, genres: this.#genresByGame(this.#findGenresStmt.all(id)).get(id) ?? [] }
   }
 
-  async save(game: Game): Promise<Result<Game, ApiError>> {
-    try {
-      this.#insertStmt.run(game.id, game.name, game.releaseYear)
-      return ok(game)
-    } catch (cause) {
-      if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(game.name) !== undefined) {
-        return err({ kind: 'conflict', message: `"${game.name}" already exists` })
-      }
-      throw cause
+  async find(id: GameId): Promise<Game | undefined> {
+    return this.#read(id)
+  }
+
+  /** Just written in the same transaction, so a miss is a broken invariant, not a 404. */
+  #readWritten(id: GameId): Result<Game, ApiError> {
+    const game = this.#read(id)
+    if (game === undefined) throw new Error(`unreachable: game ${id} unreadable right after writing it`)
+    return ok(game)
+  }
+
+  /** The body only promised well-formed ids; this is where they must also exist. */
+  #checkGenresExist(genreIds: readonly GenreId[]): Result<undefined, ApiError> {
+    const missing = genreIds.find((genreId) => this.#genreExistsStmt.get(genreId) === undefined)
+    return missing === undefined
+      ? ok(undefined)
+      : err({ kind: 'invalid_input', field: 'genreIds', message: `genre "${missing}" does not exist` })
+  }
+
+  #replaceGenres(id: GameId, genreIds: readonly GenreId[]): void {
+    this.#unlinkAllStmt.run(id)
+    for (const genreId of genreIds) this.#linkStmt.run(id, genreId)
+  }
+
+  #toConflict(cause: unknown, name: string): Result<never, ApiError> {
+    if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(name) !== undefined) {
+      return err({ kind: 'conflict', message: `"${name}" already exists` })
     }
+    throw cause
+  }
+
+  async save(id: GameId, game: NewGame): Promise<Result<Game, ApiError>> {
+    return transaction(this.#db, () => {
+      const genresExist = this.#checkGenresExist(game.genreIds)
+      if (!genresExist.ok) return genresExist
+
+      try {
+        this.#insertStmt.run(id, game.name, game.releaseYear)
+      } catch (cause) {
+        return this.#toConflict(cause, game.name)
+      }
+
+      this.#replaceGenres(id, game.genreIds)
+      return this.#readWritten(id)
+    })
   }
 
   async update(id: GameId, patch: PatchGame): Promise<Result<Game, ApiError> | undefined> {
-    const current = await this.find(id)
+    const current = this.#read(id)
     if (current === undefined) return undefined
 
-    const next: Game = {
-      id,
-      name: patch.name ?? current.name,
-      releaseYear: patch.releaseYear ?? current.releaseYear,
-    }
-
-    try {
-      this.#updateStmt.run(next.name, next.releaseYear, id)
-      return ok(next)
-    } catch (cause) {
-      if (isUniqueConstraintViolation(cause) && this.#nameExistsStmt.get(next.name) !== undefined) {
-        return err({ kind: 'conflict', message: `"${next.name}" already exists` })
+    return transaction(this.#db, () => {
+      if (patch.genreIds !== undefined) {
+        const genresExist = this.#checkGenresExist(patch.genreIds)
+        if (!genresExist.ok) return genresExist
       }
-      throw cause
-    }
+
+      const name = patch.name ?? current.name
+      try {
+        this.#updateStmt.run(name, patch.releaseYear ?? current.releaseYear, id)
+      } catch (cause) {
+        return this.#toConflict(cause, name)
+      }
+
+      if (patch.genreIds !== undefined) this.#replaceGenres(id, patch.genreIds)
+      return this.#readWritten(id)
+    })
   }
 
+  /** Its genre links go with it: ON DELETE CASCADE on game_genres. */
   async remove(id: GameId): Promise<boolean> {
-    const result = this.#removeStmt.run(id)
-    return result.changes > 0
-  }
-
-  close(): void {
-    this.#db.close()
+    return this.#removeStmt.run(id).changes > 0
   }
 }

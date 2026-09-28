@@ -24,6 +24,6 @@ export const PORT = parsePort(process.env.PORT)
  * Path to the SQLite file backing the game store ('' falls back to a
  * default; ':memory:' works too). Unlike PORT, there's no meaningful parsing
  * to do on a path ahead of time — a bad one (a directory, an unwritable
- * location) still fails loudly, just later, when GameRepository opens it.
+ * location) still fails loudly, just later, when openDatabase opens it.
  */
 export const DB_PATH = process.env.DB_PATH?.trim() || 'games.db'

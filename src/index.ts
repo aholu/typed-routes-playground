@@ -2,7 +2,9 @@ import { DB_PATH, PORT } from './config.js'
 import { createServer, type IncomingMessage } from 'node:http'
 import { bodyParsers, createHandlers, successStatus } from './api/handlers.js'
 import { createRouter } from './http/router.js'
+import { openDatabase } from './repository/database.js'
 import { GameRepository } from './repository/game-repository.js'
+import { GenreRepository } from './repository/genre-repository.js'
 
 const MAX_BODY_BYTES = 1_048_576 // 1 MiB — arbitrary but bounded, unlike no limit at all
 
@@ -21,8 +23,9 @@ const readBody = async (request: IncomingMessage): Promise<string> => {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-const repository = new GameRepository(DB_PATH)
-const route = createRouter(createHandlers(repository), bodyParsers, successStatus)
+const db = openDatabase(DB_PATH)
+const stores = { games: new GameRepository(db), genres: new GenreRepository(db) }
+const route = createRouter(createHandlers(stores), bodyParsers, successStatus)
 
 const server = createServer((request, response) => {
   void (async () => {
@@ -62,7 +65,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     server.closeAllConnections()
     server.close(() => {
-      repository.close()
+      db.close()
       process.exit(0)
     })
   })

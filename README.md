@@ -11,7 +11,8 @@ type system.
 
 No framework, no validation library, no ORM — just Node's built-in `http`, so
 that every guarantee is visibly the work of the compiler rather than of a
-dependency. The domain (a catalogue of Xbox games) is deliberately boring.
+dependency. The domain (a catalogue of Xbox games and their genres) is
+deliberately boring.
 
 ## Running it
 
@@ -28,12 +29,29 @@ curl -X POST localhost:3000/games -d '{"name":"Grounded","releaseYear":2022}'
 curl -X PATCH localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093 -d '{"releaseYear":2017}'
 curl -X DELETE localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093
 
+curl localhost:3000/genres
+curl -X POST localhost:3000/genres -d '{"name":"Role-Playing Game"}'   # slug derived: role-playing-game
+curl -X PATCH localhost:3000/genres/908d4eb1-2c79-47c6-b432-d1d655587f33 -d '{"slug":"action-games"}'
+curl -X DELETE localhost:3000/genres/908d4eb1-2c79-47c6-b432-d1d655587f33   # also unlinks it from games
+
+# genreIds sets a game's genres; in a PATCH it replaces the whole set, [] clears it
+curl -X POST localhost:3000/games -d '{"name":"Halo 5","releaseYear":2015,"genreIds":["b962b484-c997-422c-8054-aa6a3d2ac466"]}'
+curl -X PATCH localhost:3000/games/5e10d294-118c-428a-bf90-e55d21a12093 -d '{"genreIds":[]}'
+
 curl -i localhost:3000/games/not-a-uuid   # 422
 curl -i localhost:3000/players            # 404
 ```
 
 Writes persist across restarts in a local SQLite file (`DB_PATH`, defaults to
-`games.db`); the table is seeded once from `src/repository/seed-data.ts` on first run.
+`games.db`). Each table is seeded from `src/repository/seed-data.ts` while it is
+empty. The schema is versioned through `PRAGMA user_version`, and an older
+database is migrated forward on startup (see `src/repository/database.ts`).
+
+Games and genres are many-to-many through a `game_genres` link table, with
+foreign keys on and `ON DELETE CASCADE` on both sides: deleting a game or a
+genre removes its links, never the other side. A game response embeds its
+genres; a game request refers to them by `genreIds`, and an id that does not
+exist is a 422.
 
 ## The idea
 
@@ -46,6 +64,11 @@ export type Routes = {
   'POST /games': { body: NewGame; response: Game }
   'PATCH /games/:id': { body: PatchGame; response: Game }
   'DELETE /games/:id': { response: { readonly deleted: GameId } }
+  'GET /genres': { response: readonly Genre[] }
+  'GET /genres/:id': { response: Genre }
+  'POST /genres': { body: NewGenre; response: Genre }
+  'PATCH /genres/:id': { body: PatchGenre; response: Genre }
+  'DELETE /genres/:id': { response: { readonly deleted: GenreId } }
 }
 ```
 
@@ -62,9 +85,12 @@ What that buys, concretely:
   route keys; implementing it is all-or-nothing.
 - **Bodies exist only where declared.** Key remapping drops routes without a
   `body` field, so a parser cannot be registered for `GET /games`.
-- **Ids are branded.** `GameId` is a `string` at runtime but unreachable
-  without `parseGameId`, so the repository cannot be queried with unvalidated
-  input.
+- **Ids are branded.** `GameId` and `GenreId` are `string`s at runtime but
+  unreachable without `parseGameId`/`parseGenreId`, so the repository cannot be
+  queried with unvalidated input — or with a genre id where a game id belongs.
+- **Seed links are checked.** The game-to-genre seed map is keyed by the seed
+  game ids and holds seed genre slugs, both as literal types, so a typo is a
+  compile error.
 - **Failure is a value.** `Result<T, E>` forces a check before `value` can be
   read, and `ApiError` maps to status codes under an exhaustiveness check.
 - **One deliberate hole, contained.** The dispatch loop in `src/http/router.ts`
@@ -76,8 +102,8 @@ What that buys, concretely:
 
 ```
 src/
-  domain/      Game model, branded ids, Result, ApiError — no HTTP in here
-  repository/  SQLite-backed store keyed by GameId, behind an async interface
+  domain/      Game and Genre models, branded ids, Result, ApiError — no HTTP in here
+  repository/  Schema, migrations and seeding; SQLite-backed stores behind async interfaces
   api/         Route table, computed handler types, handlers
   http/        Dispatch loop and Node server adapter
 ```

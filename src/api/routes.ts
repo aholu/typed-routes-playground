@@ -1,6 +1,7 @@
 import type { ApiError } from '../domain/errors.js'
 import type { Result } from '../domain/result.js'
 import type { Game, GameId, NewGame, PatchGame } from '../domain/game.js'
+import type { Genre, GenreId, NewGenre, PatchGenre } from '../domain/genre.js'
 
 /**
  * THE SINGLE SOURCE OF TRUTH.
@@ -16,6 +17,11 @@ export type Routes = {
   'POST /games': { body: NewGame; response: Game }
   'PATCH /games/:id': { body: PatchGame; response: Game }
   'DELETE /games/:id': { response: { readonly deleted: GameId } }
+  'GET /genres': { response: readonly Genre[] }
+  'GET /genres/:id': { response: Genre }
+  'POST /genres': { body: NewGenre; response: Genre }
+  'PATCH /genres/:id': { body: PatchGenre; response: Genre }
+  'DELETE /genres/:id': { response: { readonly deleted: GenreId } }
 }
 
 export type RouteKey = keyof Routes
@@ -53,7 +59,7 @@ export type HandlerMap = { readonly [K in RouteKey]: Handler<K> }
 
 /**
  * Key remapping with `as`: routes whose contract has no `body` are mapped to
- * `never` and vanish from the map. Only 'POST /games' survives, so a parser
+ * `never` and vanish from the map. Only POST and PATCH routes survive, so a parser
  * cannot be registered for a route that never receives a body.
  */
 export type BodyParserMap = {
